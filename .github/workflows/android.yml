@@ -8,7 +8,6 @@ on:
   workflow_dispatch:
 
 env:
-  # Keep in sync with app/build.gradle.kts (ndk.abiFilters) and README.
   NDK_VERSION: "27.0.12077973"
   CARGO_NDK_VERSION: "3.5.4"
 
@@ -25,12 +24,11 @@ jobs:
           java-version: "17"
           distribution: "temurin"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android NDK
+      - name: Install Android NDK & SDK Platform
         run: |
-          sdkmanager "ndk;${{ env.NDK_VERSION }}"
+          SDKMANAGER="$(command -v sdkmanager || find "$ANDROID_HOME/cmdline-tools" -name sdkmanager | head -n 1)"
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "ndk;${{ env.NDK_VERSION }}" "platforms;android-34" "build-tools;34.0.0"
           echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${{ env.NDK_VERSION }}" >> "$GITHUB_ENV"
 
       - name: Set up Rust
@@ -74,10 +72,6 @@ jobs:
              app/src/main/jniLibs/x86_64/
           cp rust_core/target/i686-linux-android/release/librust_core.so \
              app/src/main/jniLibs/x86/
-          echo "--- staged .so files ---"
-          find app/src/main/jniLibs -name '*.so' -exec ls -lh {} \;
-          # Fail fast if any JNI symbol is missing (names must match
-          # RustBridge.kt's external funs).
           for so in app/src/main/jniLibs/*/*.so; do
             nm -D "$so" | grep -q Java_com_example_helloworld_RustBridge_sha256FileNative \
               || { echo "missing JNI symbols in $so"; exit 1; }
@@ -87,7 +81,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v3
 
       - name: Build debug APK
-        run: ./gradlew assembleDebug --stacktrace
+        run: chmod +x gradlew && ./gradlew assembleDebug --stacktrace
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
