@@ -1,0 +1,97 @@
+name: Android CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+env:
+  # Keep in sync with app/build.gradle.kts (ndk.abiFilters) and README.
+  NDK_VERSION: "27.0.12077973"
+  CARGO_NDK_VERSION: "3.5.4"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        run: |
+          sdkmanager "ndk;${{ env.NDK_VERSION }}"
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${{ env.NDK_VERSION }}" >> "$GITHUB_ENV"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: >
+            aarch64-linux-android,
+            armv7-linux-androideabi,
+            x86_64-linux-android,
+            i686-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --version "${{ env.CARGO_NDK_VERSION }}" --locked
+
+      - name: Check Rust core (host tests)
+        working-directory: rust_core
+        run: cargo test --locked
+
+      - name: Build Rust core for Android (cargo-ndk)
+        working-directory: rust_core
+        run: |
+          cargo ndk \
+            -t arm64-v8a \
+            -t armeabi-v7a \
+            -t x86_64 \
+            -t x86 \
+            build --release
+
+      - name: Stage native libs for Gradle
+        run: |
+          set -euo pipefail
+          mkdir -p app/src/main/jniLibs/arm64-v8a \
+                   app/src/main/jniLibs/armeabi-v7a \
+                   app/src/main/jniLibs/x86_64 \
+                   app/src/main/jniLibs/x86
+          cp rust_core/target/aarch64-linux-android/release/librust_core.so \
+             app/src/main/jniLibs/arm64-v8a/
+          cp rust_core/target/armv7-linux-androideabi/release/librust_core.so \
+             app/src/main/jniLibs/armeabi-v7a/
+          cp rust_core/target/x86_64-linux-android/release/librust_core.so \
+             app/src/main/jniLibs/x86_64/
+          cp rust_core/target/i686-linux-android/release/librust_core.so \
+             app/src/main/jniLibs/x86/
+          echo "--- staged .so files ---"
+          find app/src/main/jniLibs -name '*.so' -exec ls -lh {} \;
+          # Fail fast if any JNI symbol is missing (names must match
+          # RustBridge.kt's external funs).
+          for so in app/src/main/jniLibs/*/*.so; do
+            nm -D "$so" | grep -q Java_com_example_helloworld_RustBridge_sha256FileNative \
+              || { echo "missing JNI symbols in $so"; exit 1; }
+          done
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Build debug APK
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

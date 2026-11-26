@@ -1,0 +1,17 @@
+*.iml
+.gradle
+/local.properties
+/.idea/
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+app/build/
+*.apk
+*.aab
+# Rust core build outputs (rebuilt by cargo-ndk in CI / -PbuildRust)
+rust_core/target/
+app/src/main/jniLibs/
+*.rlidx
